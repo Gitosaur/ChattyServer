@@ -61,6 +61,8 @@ class GMServer:
 
         if msg['type'] == "connect":
             await self._on_client_connect(client, msg)
+        elif msg['type'] == "user_move":
+            await self._on_user_move(client, msg)
         elif msg['type'] == "create_room":
             await self._on_room_create(client, msg)
         elif msg['type'] == "join_room":
@@ -82,6 +84,21 @@ class GMServer:
         client.figure = msg['data']['figure']
         client.sex = msg['data']['sex']
         client.hotel = msg['data']['hotel']
+
+        #check if client is already connected
+        for o in self._clients:
+            if o.habbo_name == client.habbo_name and o.hotel == client.hotel:
+                err_msg = {
+                    "type": "connect",
+                    "data": {
+                        "status": "error",
+                        "message": "This user is already connected"
+                    }
+                }
+                client.send(json.dumps(err_msg))
+                client.remove()
+                return
+
         msg = {
             "type": "connect",
             "data": {
@@ -90,6 +107,13 @@ class GMServer:
         }
         self._clients.append(client)
         client.send(json.dumps(msg))
+
+    async def _on_user_move(self, client, msg):
+        for room in list(client.rooms):
+            msg['data']['name'] = client.habbo_name
+            msg['data']['hotel'] = client.hotel
+            msg['data']['room'] = room.name
+            self.broadcast(json.dumps(msg), room.name)
 
     async def _on_room_create(self, client, msg):
         room = msg['data']['room']
@@ -103,7 +127,7 @@ class GMServer:
         room = msg['data']['room']
 
         print(f"Room request for {room} by socket {client.id}")
-        pwd=None
+        pwd = None
         if "password" in msg['data']:
             pwd = msg['data']['password']
         await self._join_room(client, room, password=pwd)
@@ -290,10 +314,7 @@ class GMServer:
                 }
             }
             for other in self._clients:
-                print("sending to", other.habbo_name)
                 other.send(json.dumps(user_joined_msg))
-
-
 
     async def _leave_room(self, client: ChatroomClient, room: str, send_to_client=True):
         if room not in self._rooms.keys():
@@ -359,3 +380,4 @@ if __name__ == "__main__":
     server = GMServer()
     print(server)
     server.start()
+
