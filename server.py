@@ -9,8 +9,8 @@ from chatroom import ChatroomClient, Chatroom
 class GMServer:
     def __init__(self):
         self._rooms = {
-            'sys': Chatroom('sys'),
-            't1': Chatroom('t1'),
+            'sys': Chatroom('sys', None),
+            't1': Chatroom('t1', None),
         }
         print("SERVER START")
         self._clients = []
@@ -31,9 +31,12 @@ class GMServer:
         print(client.id, client.habbo_name, "Disconnected from the server")
         # must be wrapped in list() because removing causes the size to change while iterating
         if client.habbo_name:
-            for room_key in list(self._rooms.keys()):
-                await self._leave_room(client, room_key, send_to_client=False)
-                print(f"REMOVED {client.habbo_name} from {room_key}")
+            # for room_key in list(self._rooms.keys()):
+            #     await self._leave_room(client, room_key, send_to_client=False)
+            #     print(f"REMOVED {client.habbo_name} from {room_key}")
+            for room in list(client.rooms):
+                await self._leave_room(client, room.name, send_to_client=False)
+                print(f"REMOVED {client.habbo_name} from {room.name}")
 
         if client in self._clients:
             self._clients.remove(client)
@@ -44,8 +47,8 @@ class GMServer:
         try:
             async for message_str in websocket:
                 await self._parse_message(client, message_str)
-        except Exception:
-            pass
+        except Exception as e:
+            print(e)
         finally:
             print("User", client.habbo_name, "disconnecting...")
             asyncio.ensure_future(self._on_client_connection_closed(client))
@@ -77,6 +80,16 @@ class GMServer:
             await self._on_chat_message(client, msg)
         elif msg['type'] == "password":
             await self._on_room_pw_request(client, msg)
+        elif msg['type'] == "room_key":
+            await self._on_room_key(client, msg)
+
+
+    async def _on_room_key(self, client, msg):
+        for c in self._clients:
+            if str(c.id) == msg["data"]["for_client"]:
+                c.send(json.dumps(msg))
+                return
+
 
     async def _on_client_connect(self, client, msg):
         client.habbo_name = msg['data']['name']
@@ -130,7 +143,24 @@ class GMServer:
         pwd = None
         if "password" in msg['data']:
             pwd = msg['data']['password']
-        await self._join_room(client, room, password=pwd)
+        success = await self._join_room(client, room, password=pwd)
+        if success:
+            await self._send_room_key_request(client, room, msg)
+
+    async def _send_room_key_request(self, client: ChatroomClient, room: str, msg):
+        # send the host a key request
+        key_req = {
+            "type": "room_key_request",
+            "data": {
+                "room": room,
+                "dh_pub": msg["data"]["dhPub"],
+                "clientId": str(client.id)
+            }
+        }
+        host = self._rooms[room].host
+        print(json.dumps(key_req))
+        host.send(json.dumps(key_req))
+
 
     async def _on_leave_room(self, client, msg):
         room = msg['data']['room']
@@ -232,7 +262,8 @@ class GMServer:
             err['data']['message'] = "The room you want to create already exists"
             client.send(json.dumps(err))
         else:
-            self._rooms[room_name] = Chatroom(room_name, password)
+            self._rooms[room_name] = Chatroom(room_name, client, password)
+            self._rooms[room_name].host = client
             await self._join_room(client, room_name, password)
             for c in self._clients:
                 creator = {
@@ -272,11 +303,16 @@ class GMServer:
                 if password is None:
                     err['data']['message'] = "You must provide a password to join this room"
                     client.send(json.dumps(err))
-                    return
+                    return False
                 elif room.password != password:
                     err['data']['message'] = "Wrong password"
                     client.send(json.dumps(err))
-                    return
+                    return False
+
+            # evict user out of his previous room if he is in one
+            for room_key in list(self._rooms.keys()):
+                if client in self._rooms[room_key].clients:
+                    await self._leave_room(client, room_key, send_to_client=True)
 
             print(f"Adding client {client.habbo_name} ({client.id}) to room {room.name}")
             room.add_client(client)
@@ -315,6 +351,7 @@ class GMServer:
             }
             for other in self._clients:
                 other.send(json.dumps(user_joined_msg))
+            return True
 
     async def _leave_room(self, client: ChatroomClient, room: str, send_to_client=True):
         if room not in self._rooms.keys():
@@ -338,7 +375,7 @@ class GMServer:
             if send_to_client:
                 client.send(json.dumps(err))
         else:
-            print(f"Removing client {client.id} from room {self._rooms[room].name}")
+            print( f"Removing client {client.id} from room {self._rooms[room].name}")
             # self.broadcast(f"Removing client {client.id} from room {self._rooms[room].name}", 'sys')
             self._rooms[room].remove_client(client)
 
@@ -363,6 +400,11 @@ class GMServer:
             # notify the habbo that he successfully left
             if send_to_client:
                 client.send(json.dumps(msg))
+        # if the host left make other new user the host
+        if room in self._rooms and self._rooms[room].host == client:
+            if len(self._rooms[room].clients) > 0:
+                self._rooms[room].host = list(self._rooms[room].clients)[0]
+
 
     def broadcast(self, message, room):
         if room in self._rooms:

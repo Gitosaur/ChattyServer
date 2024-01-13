@@ -49,10 +49,11 @@ class ChatroomClient:
 
 
 class Chatroom:
-    def __init__(self, name, password=None):
+    def __init__(self, name: str, host: ChatroomClient, password=None):
         self.name = name
         self.clients = set()
         self.password = password
+        self.host = host
 
     def size(self):
         return len(self.clients)
