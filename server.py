@@ -9,8 +9,8 @@ from chatroom import ChatroomClient, Chatroom
 class GMServer:
     def __init__(self):
         self._rooms = {
-            'sys': Chatroom('sys', None),
-            't1': Chatroom('t1', None),
+            # 'sys': Chatroom('sys', None),
+            # 't1': Chatroom('t1', None),
         }
         print("SERVER START")
         self._clients = []
